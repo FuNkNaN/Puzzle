@@ -111,7 +111,7 @@ module internal Solve =
 
     /// Starting from point 1 iterate all plausible NP-complete paths
     /// and return them as a Path (Unbalanced Tree structure).
-    let walkGrid i j (oriGrid: int[][]) nFix =
+    let walkGrid nFix (i, j, oriGrid: int[][]) =
         let dim = oriGrid |> Array.length
         /// Expand the range to adjacent cells and recursively dive into valid paths.
         let rec cross (grid: int[][]) i j (next: int) (depth: int) (dir: Move) =
@@ -189,61 +189,50 @@ module Generate =
 
     /// Generate list with locations of fixed points.
     let private constr nFix pop =
-        let prev = ref Set.empty
+        let set = System.Collections.Generic.HashSet()
         List.unfold
             (fun (n,x) ->
-                if n <= nFix then
-                    // add current value to Set of previous vals
-                    prev := (!prev).Add x
-                    // pop until there's a valid value
-                    let v = ref <| pop()
-                    while (!prev).Contains !v do
-                        v := pop()
-                    // return the current and next value
-                    Some((n, x),(n+1, !v))
-                else // terminator
+                if n <= nFix && set.Add x then
+                    // fetch next value
+                    let v = Seq.initInfinite (fun _ -> pop())
+                            |> Seq.find (set.Contains >> not)
+                    Some((n, x),(n+1, v))
+                else
                     None)
             (1,pop())
 
-    /// Update grid, iOri and jOri references.
     /// Calculates a new random grid.
-    let internal nxtGrid grid iOri jOri dim nFix =
+    let internal nxtGrid dim nFix =
         let list = constr nFix <| rndGen dim
         match list with
         | [] -> failwith "List with fixed points cannot be empty."
-        | (_, x) :: _ -> iOri := (x / dim) ; jOri := (x % dim)
-        // Use list to transform the zero value grid.
-        grid := Array.init dim (fun _ -> Array.create dim 0)
-        list 
-        |> List.iter 
-            (fun (n, x) 
-                ->  let i = x / dim
-                    let j = x % dim 
-                    (!grid).[i].[j] <- n
-            )
+        | (_, x) :: _ ->
+            let grid = Array.init dim (fun _ -> Array.create dim 0)
+            list // Use list to transform the zero value grid.
+            |> List.iter 
+                (fun (n, x) 
+                    ->  let i = x / dim
+                        let j = x % dim 
+                        (grid).[i].[j] <- n
+                )
+            (x / dim) , (x % dim) , grid
 
     /// Create a new puzzle
     /// of given dimension and number of fixed points.
     let newPuzzle dim nFix =
-        let grid = ref <| Array.create dim Array.empty
-        let iOri , jOri = ref 0 , ref 0
-        nxtGrid grid iOri jOri dim nFix
-        let path = ref <| Solve.walkGrid !iOri !jOri !grid nFix
-        while Solve.getCount nFix dim !path <> 1 do
-            nxtGrid grid iOri jOri dim nFix
-            path := Solve.walkGrid !iOri !jOri !grid nFix
-        !grid
+        let predicate path =
+            Solve.getCount nFix dim path = 1
+        Seq.initInfinite (fun _ -> nxtGrid dim nFix)
+        |> Seq.find (Solve.walkGrid nFix >> predicate)
+        |> (fun (_, _, g) -> g) 
 
     /// Create a new puzzle, with a minimum score, 
     /// of given dimension and number of fixed points.
     let newPuzzleOfScore minScore dim nFix =
-        let grid = ref <| Array.create dim Array.empty
-        let iOri , jOri = ref 0 , ref 0
         let depth = dim * dim - 1
-        nxtGrid grid iOri jOri dim nFix
-        let path = ref <| Solve.walkGrid !iOri !jOri !grid nFix
-        while Solve.getCount nFix dim !path <> 1 
-              && Analyse.score depth !path < minScore do
-            nxtGrid grid iOri jOri dim nFix
-            path := Solve.walkGrid !iOri !jOri !grid nFix
-        !grid
+        let predicate path =
+            Solve.getCount nFix dim path = 1 
+            && Analyse.score depth path >= minScore
+        Seq.initInfinite (fun _ -> nxtGrid dim nFix)
+        |> Seq.find (Solve.walkGrid nFix >> predicate)
+        |> (fun (_, _, g) -> g) 
